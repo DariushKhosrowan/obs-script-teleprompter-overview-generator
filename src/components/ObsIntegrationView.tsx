@@ -364,6 +364,18 @@ export const ObsIntegrationView: React.FC<ObsIntegrationViewProps> = ({
               <span>در Studio Mode، صحنه «99 تلهپرامپتر» را همیشه در Preview نگه دار</span>
             </label>
 
+            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.slideMotion}
+                onChange={(e) =>
+                  onUpdateSettings({ slideMotion: e.target.checked })
+                }
+                className="h-4 w-4 accent-amber-400"
+              />
+              <span>حرکت و زوم خودکار اسلایدها (اگر لبه‌ها بیرون می‌زند خاموش بگذارید)</span>
+            </label>
+
             {obsStatus.errorMessage && (
               <div
                 role="alert"

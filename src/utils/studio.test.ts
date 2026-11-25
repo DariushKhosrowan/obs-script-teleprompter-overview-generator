@@ -27,6 +27,7 @@ const SAMPLE_SETTINGS: ObsSettings = {
   pollIntervalMs: 150,
   clickTextToAdvance: true,
   autoStudioPreviewSync: true,
+  slideMotion: false,
   fontSizePx: 42,
   mirror: false,
   autoScroll: false,
@@ -90,12 +91,16 @@ test('generateLuaV8 includes Arrow Left/Right keys, PNG prompter priority, and P
   assert.match(lua, /update_native_prompter_text/);
   assert.match(lua, /sync_studio_preview/);
   assert.match(lua, /obs_frontend_set_current_preview_scene/);
+  assert.match(lua, /local MOTION_ON = false/);
+  assert.match(lua, /fit_slide/);
 
-  const winLua = generateLuaV8(DEFAULT_STEPS, {
+  const motionLua = generateLuaV8(DEFAULT_STEPS, {
     ...SAMPLE_SETTINGS,
+    slideMotion: true,
     osTarget: 'windows',
   });
-  assert.match(winLua, /text_gdiplus_v2/);
+  assert.match(motionLua, /text_gdiplus_v2/);
+  assert.match(motionLua, /local MOTION_ON = true/);
 });
 
 test('generatePrompterHtml embeds steps JSON, Arrow keys, WebSocket trigger, and fast state polling', () => {

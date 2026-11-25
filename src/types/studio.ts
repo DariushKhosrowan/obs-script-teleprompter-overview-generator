@@ -41,6 +41,7 @@ export interface ObsSettings {
   pollIntervalMs: number;
   clickTextToAdvance: boolean;
   autoStudioPreviewSync: boolean;
+  slideMotion: boolean;
   fontSizePx: number;
   mirror: boolean;
   autoScroll: boolean;

@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS: ObsSettings = {
   pollIntervalMs: 150,
   clickTextToAdvance: true,
   autoStudioPreviewSync: true,
+  slideMotion: false,
   fontSizePx: 40,
   mirror: false,
   autoScroll: false,

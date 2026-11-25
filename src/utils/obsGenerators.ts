@@ -31,6 +31,7 @@ export function generateLuaV8(steps: StudioStep[], settings: ObsSettings): strin
   const textSourceId =
     settings.osTarget === 'windows' ? 'text_gdiplus_v2' : 'text_ft2_source_v2';
   const studioPreviewFlag = settings.autoStudioPreviewSync ? 'true' : 'false';
+  const slideMotionFlag = settings.slideMotion ? 'true' : 'false';
 
   return `--[[
 Hark Studio v8 — One-Click Teleprompter + Slide Sync for OBS (Lua script)
@@ -372,7 +373,7 @@ local function place(scene, src, x, y, w, h, outer)
 end
 
 ---------------------------------------------------------------- motion
-local MOTION_ON = true
+local MOTION_ON = ${slideMotionFlag}
 local INTRO_T, KB_T, PUNCH_T = 0.7, 30.0, 0.8
 local KF = nil
 local CUR = {s = 1.0, x = 0.0, y = 0.0}
@@ -426,11 +427,11 @@ local function go(a, b, dur, ease, nxt)
 end
 
 local function kb_target(from, kind)
-  if kind == "out" then return {s = 1.02, x = 0, y = 0} end
-  if kind == "left" then return {s = from.s + 0.02, x = -(from.s - 1) * W / 2, y = 0} end
-  if kind == "right" then return {s = from.s + 0.02, x = (from.s - 1) * W / 2, y = 0} end
-  if kind == "none" then return {s = from.s, x = from.x, y = from.y} end
-  return {s = 1.10, x = from.x * 0.3, y = from.y * 0.3}
+  if kind == "out" then return {s = 1.0, x = 0, y = 0} end
+  if kind == "left" then return {s = 1.04, x = -(1.04 - 1) * W / 2, y = 0} end
+  if kind == "right" then return {s = 1.04, x = (1.04 - 1) * W / 2, y = 0} end
+  if kind == "none" then return {s = 1.0, x = 0, y = 0} end
+  return {s = 1.05, x = 0, y = 0}
 end
 
 local function motion_new_slide(st)
@@ -441,15 +442,15 @@ local function motion_new_slide(st)
   ZOOMED = false
   local start, land
   if kind == "out" then
-    start = {s = 1.16, x = 0, y = 0}; land = {s = 1.10, x = 0, y = 0}
+    start = {s = 1.06, x = 0, y = 0}; land = {s = 1.02, x = 0, y = 0}
   elseif kind == "left" then
-    start = {s = 1.12, x = W * 0.06, y = 0}; land = {s = 1.08, x = W * 0.03, y = 0}
+    start = {s = 1.05, x = W * 0.02, y = 0}; land = {s = 1.03, x = W * 0.01, y = 0}
   elseif kind == "right" then
-    start = {s = 1.12, x = -W * 0.06, y = 0}; land = {s = 1.08, x = -W * 0.03, y = 0}
+    start = {s = 1.05, x = -W * 0.02, y = 0}; land = {s = 1.03, x = -W * 0.01, y = 0}
   elseif kind == "none" then
     start = {s = 1.0, x = 0, y = 0}; land = start
   else
-    start = {s = 1.12, x = 0, y = 0}; land = {s = 1.0, x = 0, y = 0}
+    start = {s = 1.05, x = 0, y = 0}; land = {s = 1.0, x = 0, y = 0}
   end
   start = clampst(start); land = clampst(land)
   put(start)
@@ -843,7 +844,9 @@ function script_properties()
   end
   obs.source_list_release(sources)
   obs.obs_properties_add_bool(p, "studio_preview", "نگه‌داشتن پرامپتر در Preview هنگام Studio Mode")
+  obs.obs_properties_add_bool(p, "slide_motion", "حرکت/زوم خودکار اسلایدها (F7) — خاموش = بدون بیرون‌زدگی لبه‌ها")
   obs.obs_properties_add_button(p, "build", "Build scenes (یکبار)", function() build_scenes(); apply(); return true end)
+  obs.obs_properties_add_button(p, "fit_slide", "تنظیم دقیق کادر اسلاید (۱۰۰٪ بدون برش)", function() KF = nil; ZOOMED = false; put({s = 1, x = 0, y = 0}); return true end)
   obs.obs_properties_add_button(p, "arrowkeys", "تنظیم کلیدهای جهت (← جلو / → عقب)", function() reset_arrow_hotkeys(); return true end)
   obs.obs_properties_add_int(p, "goto", "برو به مرحله", 1, 300, 1)
   obs.obs_properties_add_button(p, "go", "Go", function() apply(); return true end)
@@ -859,12 +862,15 @@ end
 
 function script_defaults(settings)
   obs.obs_data_set_default_bool(settings, "studio_preview", AUTO_STUDIO_PREVIEW)
+  obs.obs_data_set_default_bool(settings, "slide_motion", MOTION_ON)
 end
 
 function script_update(settings)
   my_settings = settings
   cam_name = obs.obs_data_get_string(settings, "cam")
   AUTO_STUDIO_PREVIEW = obs.obs_data_get_bool(settings, "studio_preview")
+  MOTION_ON = obs.obs_data_get_bool(settings, "slide_motion")
+  if not MOTION_ON and not ZOOMED then KF = nil; put({s = 1, x = 0, y = 0}) end
   local g = obs.obs_data_get_int(settings, "goto")
   if g >= 1 and g <= #STEPS then idx = g end
 end
