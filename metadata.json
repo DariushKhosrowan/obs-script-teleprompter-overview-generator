@@ -1,0 +1,6 @@
+{
+  "name": "Hark Studio — OBS Teleprompter & Slide Sync",
+  "description": "کنترل یک‌کلیکی تله‌پرامپتر و اسلاید درون OBS Studio همراه با داک وب‌سوکت، اسکریپت Lua نسخه ۸ و ویرایشگر مراحل.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
