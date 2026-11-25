@@ -44,14 +44,15 @@ Hark Studio v8 — One-Click Teleprompter + Slide Sync for OBS (Lua script)
       2) OBS Studio Mode: Program = "00 استودیو" (recorded), Preview = "99 تلهپرامپتر" (only you see it!)
       3) Native OBS Text Source ("${textSourceId}") auto-created even if Browser Source is missing
   * Hotkeys (Settings > Hotkeys -> "HS ..."):
-      PageDown = next step (slide + scene + teleprompter)
-      PageUp   = previous step
-      F9       = jump to first step of current act
-      F1/F2/F3 = force layout (slide / slide+me / me only)
-      F5/F6/F7 = zoom in/out / zoom out / motion toggle
+      Arrow Left  (←) = next step (slide + scene + teleprompter)
+      Arrow Right (→) = previous step
+      F9              = jump to first step of current act
+      F1/F2/F3        = force layout (slide / slide+me / me only)
+      F5/F6/F7        = zoom in/out / zoom out / motion toggle
 
 Expected files next to this script (${steps.length} steps):
   steps_data.lua, prompter.html, fonts/, slides/slide-01.png ..., slides/bg.png
+  Optional (for pixel-perfect RTL PNG teleprompter): prompter/p-01.png ... p-${String(steps.length).padStart(2, '0')}.png
 --]]
 
 obs = obslua
@@ -76,11 +77,13 @@ local SRC_SLIDE = "HS اسلاید"
 local SRC_BG    = "HS پسزمینه"
 local SRC_WEB   = "HS پرامپتر"
 local SRC_TEXT  = "HS متن پرامپتر"
+local SRC_PROMPTER_IMG = "HS تصویر پرامپتر"
 local W, H = 1920, 1080
+local TEXT_KIND_USED = "text_ft2_source_v2"
 
 local DEFAULT_KEYS = {
-  hs_next = "OBS_KEY_PAGEDOWN",
-  hs_prev = "OBS_KEY_PAGEUP",
+  hs_next = "OBS_KEY_LEFT",
+  hs_prev = "OBS_KEY_RIGHT",
   hs_rec  = "OBS_KEY_F9",
   hs_slide = "OBS_KEY_F1",
   hs_scam  = "OBS_KEY_F2",
@@ -106,6 +109,7 @@ local function load_steps()
 end
 
 local function slide_path(n) return string.format("%sslides/slide-%02d.png", DIR, n) end
+local function prompter_img_path(n) return string.format("%sprompter/p-%02d.png", DIR, n) end
 
 local function get_or_make_source(name, kind, settings_fn)
   local src = obs.obs_get_source_by_name(name)
@@ -129,13 +133,168 @@ local function set_slide_file(n)
   obs.obs_source_release(src)
 end
 
--- Wrap UTF-8 Persian text neatly for native OBS Text Source fallback
+---------------------------------------------------------------- Persian Shaping + BiDi (Lua 5.1)
+local PERSIAN_FORMS = {
+  [0x0622]={0xFE81,0xFE82,0xFE81,0xFE82,false}, [0x0623]={0xFE83,0xFE84,0xFE83,0xFE84,false},
+  [0x0624]={0xFE85,0xFE86,0xFE85,0xFE86,false}, [0x0625]={0xFE87,0xFE88,0xFE87,0xFE88,false},
+  [0x0626]={0xFE89,0xFE8A,0xFE8B,0xFE8C,true},  [0x0627]={0xFE8D,0xFE8E,0xFE8D,0xFE8E,false},
+  [0x0628]={0xFE8F,0xFE90,0xFE91,0xFE92,true},  [0x0629]={0xFE93,0xFE94,0xFE93,0xFE94,false},
+  [0x062A]={0xFE95,0xFE96,0xFE97,0xFE98,true},  [0x062B]={0xFE99,0xFE9A,0xFE9B,0xFE9C,true},
+  [0x062C]={0xFE9D,0xFE9E,0xFE9F,0xFEA0,true},  [0x062D]={0xFEA1,0xFEA2,0xFEA3,0xFEA4,true},
+  [0x062E]={0xFEA5,0xFEA6,0xFEA7,0xFEA8,true},  [0x062F]={0xFEA9,0xFEAA,0xFEA9,0xFEAA,false},
+  [0x0630]={0xFEAB,0xFEAC,0xFEAB,0xFEAC,false}, [0x0631]={0xFEAD,0xFEAE,0xFEAD,0xFEAE,false},
+  [0x0632]={0xFEAF,0xFEB0,0xFEAF,0xFEB0,false}, [0x0633]={0xFEB1,0xFEB2,0xFEB3,0xFEB4,true},
+  [0x0634]={0xFEB5,0xFEB6,0xFEB7,0xFEB8,true},  [0x0635]={0xFEB9,0xFEBA,0xFEBB,0xFEBC,true},
+  [0x0636]={0xFEBD,0xFEBE,0xFEBF,0xFEC0,true},  [0x0637]={0xFEC1,0xFEC2,0xFEC3,0xFEC4,true},
+  [0x0638]={0xFEC5,0xFEC6,0xFEC7,0xFEC8,true},  [0x0639]={0xFEC9,0xFECA,0xFECB,0xFECC,true},
+  [0x063A]={0xFECD,0xFECE,0xFECF,0xFED0,true},  [0x0640]={0x0640,0x0640,0x0640,0x0640,true},
+  [0x0641]={0xFED1,0xFED2,0xFED3,0xFED4,true},  [0x0642]={0xFED5,0xFED6,0xFED7,0xFED8,true},
+  [0x0643]={0xFED9,0xFEDA,0xFEDB,0xFEDC,true},  [0x0644]={0xFEDD,0xFEDE,0xFEDF,0xFEE0,true},
+  [0x0645]={0xFEE1,0xFEE2,0xFEE3,0xFEE4,true},  [0x0646]={0xFEE5,0xFEE6,0xFEE7,0xFEE8,true},
+  [0x0647]={0xFEE9,0xFEEA,0xFEEB,0xFEEC,true},  [0x0648]={0xFEED,0xFEEE,0xFEED,0xFEEE,false},
+  [0x0649]={0xFEEF,0xFEF0,0xFEEF,0xFEF0,false}, [0x064A]={0xFEF1,0xFEF2,0xFEF3,0xFEF4,true},
+  [0x067E]={0xFB56,0xFB57,0xFB58,0xFB59,true},  [0x0686]={0xFB7A,0xFB7B,0xFB7C,0xFB7D,true},
+  [0x0698]={0xFB8A,0xFB8B,0xFB8A,0xFB8B,false}, [0x06A9]={0xFB8E,0xFB8F,0xFB90,0xFB91,true},
+  [0x06AF]={0xFB92,0xFB93,0xFB94,0xFB95,true},  [0x06C0]={0xFBA4,0xFBA5,0xFBA4,0xFBA5,false},
+  [0x06CC]={0xFBFC,0xFBFD,0xFBFE,0xFBFF,true},
+}
+local LA_LIG = {
+  [0x0622]={0xFEF5,0xFEF6}, [0x0623]={0xFEF7,0xFEF8},
+  [0x0625]={0xFEF9,0xFEFA}, [0x0627]={0xFEFB,0xFEFC},
+}
+local MIRROR_CP = {
+  [40]=41, [41]=40, [91]=93, [93]=91, [123]=125, [125]=123, [0x00AB]=0x00BB, [0x00BB]=0x00AB,
+}
+
+local function utf8_to_cps(s)
+  local cps, i, len = {}, 1, #s
+  while i <= len do
+    local b1 = string.byte(s, i)
+    if b1 < 128 then
+      table.insert(cps, b1); i = i + 1
+    elseif b1 >= 192 and b1 < 224 and i + 1 <= len then
+      local b2 = string.byte(s, i + 1)
+      table.insert(cps, (b1 - 192) * 64 + (b2 - 128)); i = i + 2
+    elseif b1 >= 224 and b1 < 240 and i + 2 <= len then
+      local b2, b3 = string.byte(s, i + 1, i + 2)
+      table.insert(cps, (b1 - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128)); i = i + 3
+    elseif b1 >= 240 and i + 3 <= len then
+      local b2, b3, b4 = string.byte(s, i + 1, i + 3)
+      table.insert(cps, (b1 - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128)); i = i + 4
+    else
+      i = i + 1
+    end
+  end
+  return cps
+end
+
+local function cp_to_utf8(cp)
+  if cp < 128 then return string.char(cp)
+  elseif cp < 2048 then
+    return string.char(192 + math.floor(cp / 64), 128 + (cp % 64))
+  elseif cp < 65536 then
+    return string.char(224 + math.floor(cp / 4096), 128 + (math.floor(cp / 64) % 64), 128 + (cp % 64))
+  else
+    return string.char(240 + math.floor(cp / 262144), 128 + (math.floor(cp / 4096) % 64), 128 + (math.floor(cp / 64) % 64), 128 + (cp % 64))
+  end
+end
+
+local function is_tashkeel(cp)
+  return (cp >= 0x064B and cp <= 0x065F) or cp == 0x0670
+end
+
+local function is_ltr_cp(cp)
+  return (cp >= 65 and cp <= 90) or (cp >= 97 and cp <= 122)
+    or (cp >= 48 and cp <= 57) or (cp >= 0x06F0 and cp <= 0x06F9)
+    or (cp >= 0x0660 and cp <= 0x0669)
+end
+
+local function shape_persian_word_cps(cps)
+  local out = {}
+  local i, n = 1, #cps
+  local function prev_join_idx(pos)
+    local p = pos - 1
+    while p >= 1 and is_tashkeel(cps[p]) do p = p - 1 end
+    if p < 1 then return false end
+    local f = PERSIAN_FORMS[cps[p]]
+    return f ~= nil and f[5] == true
+  end
+  local function next_letter_exists(pos)
+    local q = pos + 1
+    while q <= n and is_tashkeel(cps[q]) do q = q + 1 end
+    if q > n then return false end
+    return PERSIAN_FORMS[cps[q]] ~= nil
+  end
+
+  while i <= n do
+    local cp = cps[i]
+    if cp == 0x200C then
+      i = i + 1
+    elseif is_tashkeel(cp) then
+      i = i + 1
+    elseif cp == 0x0644 and i + 1 <= n and LA_LIG[cps[i + 1]] then
+      local pj = prev_join_idx(i)
+      local lig = LA_LIG[cps[i + 1]]
+      table.insert(out, pj and lig[2] or lig[1])
+      i = i + 2
+    else
+      local f = PERSIAN_FORMS[cp]
+      if f then
+        local pj = prev_join_idx(i)
+        local nj = next_letter_exists(i)
+        if pj and nj then table.insert(out, f[4])
+        elseif pj then table.insert(out, f[2])
+        elseif nj then table.insert(out, f[3])
+        else table.insert(out, f[1]) end
+      else
+        table.insert(out, cp)
+      end
+      i = i + 1
+    end
+  end
+  return out
+end
+
+local function bidi_visual_line(line)
+  local cps = utf8_to_cps(line)
+  local shaped = shape_persian_word_cps(cps)
+  local runs, cur_ltr, cur = {}, nil, {}
+  local function flush()
+    if #cur > 0 then table.insert(runs, {ltr = cur_ltr, cps = cur}); cur = {} end
+  end
+  for k, cp in ipairs(shaped) do
+    local ltr = is_ltr_cp(cp)
+    -- Keep hyphens/dots/slashes/commas/spaces inside an English or numeric run as LTR
+    if not ltr and cur_ltr == true and (cp == 44 or cp == 45 or cp == 46 or cp == 47 or cp == 58 or cp == 37 or cp == 32 or cp == 0x066B or cp == 0x066C) then
+      local nxt = shaped[k + 1]
+      if nxt and is_ltr_cp(nxt) then ltr = true end
+    end
+    if cur_ltr == nil then cur_ltr = ltr end
+    if ltr ~= cur_ltr then flush(); cur_ltr = ltr end
+    table.insert(cur, cp)
+  end
+  flush()
+
+  local pieces = {}
+  for r = #runs, 1, -1 do
+    local run = runs[r]
+    if run.ltr then
+      for k = 1, #run.cps do table.insert(pieces, cp_to_utf8(run.cps[k])) end
+    else
+      for k = #run.cps, 1, -1 do
+        local c = MIRROR_CP[run.cps[k]] or run.cps[k]
+        table.insert(pieces, cp_to_utf8(c))
+      end
+    end
+  end
+  return table.concat(pieces)
+end
+
 local function wrap_utf8(str, max_chars)
-  if not str or str == "" then return "" end
+  if not str or str == "" then return {} end
   local lines, cur, count = {}, "", 0
   for word in str:gmatch("%S+") do
-    local wlen = 0
-    for _ in word:gmatch("[%z\\1-\\127\\194-\\244][\\128-\\191]*") do wlen = wlen + 1 end
+    local wlen = #utf8_to_cps(word)
     if count > 0 and count + 1 + wlen > max_chars then
       table.insert(lines, cur)
       cur = word
@@ -146,20 +305,53 @@ local function wrap_utf8(str, max_chars)
     end
   end
   if cur ~= "" then table.insert(lines, cur) end
-  return table.concat(lines, "\\n")
+  return lines
+end
+
+local function shape_multiline_for_ft2(logical_lines)
+  local out = {}
+  for _, ln in ipairs(logical_lines) do
+    table.insert(out, bidi_visual_line(ln))
+  end
+  return table.concat(out, "\\n")
 end
 
 local function update_native_prompter_text()
+  local st = STEPS[idx]
+  if st == nil then return end
+
+  -- Priority 1: Pre-rendered crisp PNG prompter slides (perfect HarfBuzz Persian + English)
+  local img_src = obs.obs_get_source_by_name(SRC_PROMPTER_IMG)
+  if img_src ~= nil then
+    local p = prompter_img_path(idx)
+    if file_exists(p) then
+      local s = obs.obs_source_get_settings(img_src)
+      obs.obs_data_set_string(s, "file", p)
+      obs.obs_source_update(img_src, s)
+      obs.obs_data_release(s)
+    end
+    obs.obs_source_release(img_src)
+    return
+  end
+
+  -- Priority 2: Native OBS text source fallback (shaped RTL + LTR for Linux ft2, logical for Windows GDI+)
   local src = obs.obs_get_source_by_name(SRC_TEXT)
   if src == nil then return end
-  local st = STEPS[idx]
-  if st == nil then obs.obs_source_release(src); return end
   local nx = STEPS[idx + 1]
   local header = string.format("پرده %d · مرحله %d از %d · %s · اسلاید %d",
     st.act or 1, idx, #STEPS, st.layout or "SCAM", st.slide or 0)
-  local body = wrap_utf8(st.text or "", 42)
+  local body_lines = wrap_utf8(st.text or "", 44)
   local footer = nx and string.format("بعدی: %s (اسلاید %d)", nx.layout or "", nx.slide or 0) or "پایان اسکریپت"
-  local full = header .. "\\n────────────────────────\\n" .. body .. "\\n────────────────────────\\n" .. footer
+
+  local all_lines = {header, "────────────────────────"}
+  for _, l in ipairs(body_lines) do table.insert(all_lines, l) end
+  table.insert(all_lines, "────────────────────────")
+  table.insert(all_lines, footer)
+
+  local full = (TEXT_KIND_USED == "text_gdiplus_v2")
+    and table.concat(all_lines, "\\n")
+    or shape_multiline_for_ft2(all_lines)
+
   local s = obs.obs_source_get_settings(src)
   obs.obs_data_set_string(s, "text", full)
   obs.obs_source_update(src, s)
@@ -428,9 +620,22 @@ local function build_scenes()
   if prog ~= nil then obs.obs_frontend_set_current_scene(prog); obs.obs_source_release(prog) end
 
   -- Teleprompter Scene inside OBS:
-  -- Uses browser_source when available; otherwise automatically builds a native OBS Text source!
+  -- Priority 1: Pre-rendered PNG slides in prompter/p-01.png (flawless RTL + English)
+  -- Priority 2: browser_source (prompter.html)
+  -- Priority 3: Native OBS Text source with Lua Persian Reshaper + BiDi
+  local has_prompter_imgs = file_exists(prompter_img_path(1))
   local has_browser = obs.obs_source_get_display_name("browser_source") ~= nil
-  if has_browser then
+  if has_prompter_imgs then
+    local pimg = get_or_make_source(SRC_PROMPTER_IMG, "image_source", function(s)
+      obs.obs_data_set_string(s, "file", prompter_img_path(1))
+    end)
+    if pimg ~= nil then
+      make(SCN.PROMPTER, function(sc) place(sc, pimg, 0, 0, W, H, false) end)
+      obs.obs_source_release(pimg)
+      update_native_prompter_text()
+      log("Created PNG image prompter scene: " .. SCN.PROMPTER)
+    end
+  elseif has_browser then
     local web = get_or_make_source(SRC_WEB, "browser_source", function(s)
       obs.obs_data_set_bool(s, "is_local_file", true)
       obs.obs_data_set_string(s, "local_file", DIR .. "prompter.html")
@@ -444,19 +649,35 @@ local function build_scenes()
   else
     local text_kind = obs.obs_source_get_display_name("${textSourceId}") ~= nil and "${textSourceId}"
       or (obs.obs_source_get_display_name("text_gdiplus_v2") ~= nil and "text_gdiplus_v2" or "text_ft2_source_v2")
+    TEXT_KIND_USED = text_kind
     local txt_src = get_or_make_source(SRC_TEXT, text_kind, function(s)
       obs.obs_data_set_string(s, "text", "تله‌پرامپتر آماده است")
+      if text_kind == "text_gdiplus_v2" then
+        obs.obs_data_set_string(s, "align", "right")
+      end
       local font = obs.obs_data_create()
       obs.obs_data_set_string(font, "face", "Vazirmatn")
-      obs.obs_data_set_int(font, "size", 56)
+      obs.obs_data_set_int(font, "size", 52)
       obs.obs_data_set_obj(s, "font", font)
       obs.obs_data_release(font)
     end)
     if txt_src ~= nil then
-      make(SCN.PROMPTER, function(sc) place(sc, txt_src, 80, 60, W - 160, H - 120, false) end)
+      make(SCN.PROMPTER, function(sc)
+        local item = obs.obs_scene_add(sc, txt_src)
+        if item ~= nil then
+          -- Anchor top-right (OBS_ALIGN_RIGHT=2 | OBS_ALIGN_TOP=4 = 6)
+          obs.obs_sceneitem_set_alignment(item, 6)
+          obs.obs_sceneitem_set_bounds_alignment(item, 6)
+          local pos = obs.vec2(); pos.x = W - 80; pos.y = 60
+          obs.obs_sceneitem_set_pos(item, pos)
+          obs.obs_sceneitem_set_bounds_type(item, obs.OBS_BOUNDS_SCALE_INNER)
+          local b = obs.vec2(); b.x = W - 160; b.y = H - 120
+          obs.obs_sceneitem_set_bounds(item, b)
+        end
+      end)
       obs.obs_source_release(txt_src)
       update_native_prompter_text()
-      log("Created native OBS text prompter scene: " .. SCN.PROMPTER)
+      log("Created native OBS text prompter scene (" .. text_kind .. "): " .. SCN.PROMPTER)
     end
   end
 
@@ -588,10 +809,26 @@ local function toggle(layout)
 end
 
 ---------------------------------------------------------------- OBS API
+local function reset_arrow_hotkeys()
+  for name, key_name in pairs({hs_next = "OBS_KEY_LEFT", hs_prev = "OBS_KEY_RIGHT"}) do
+    local id = hk[name]
+    if id ~= nil then
+      local arr = obs.obs_data_array_create()
+      local k = obs.obs_data_create()
+      obs.obs_data_set_string(k, "key", key_name)
+      obs.obs_data_array_push_back(arr, k)
+      obs.obs_data_release(k)
+      obs.obs_hotkey_load(id, arr)
+      obs.obs_data_array_release(arr)
+    end
+  end
+  log("Hotkeys updated: Arrow Left = next, Arrow Right = prev")
+end
+
 function script_description()
-  return [[<b>Hark Studio v8 (پرامپتر درون OBS + همگام‌سازی یک‌کلیکی)</b><br>
-۱) دوربین را انتخاب کن ۲) Build scenes ۳) در OBS از <b>Docks > Custom Browser Docks</b> فایل <code>prompter.html</code> را اضافه کن (یا Studio Mode را روشن کن تا «99 تلهپرامپتر» روی Preview بماند).<br>
-کلیک روی دکمه «مرحله بعد» داخل پرامپتر (یا PageDown) همزمان متن، اسلاید و صحنه را جلو می‌برد.]]
+  return [[<b>Hark Studio v8 (پرامپتر درون OBS + راست‌چین فارسی/انگلیسی + کلیدهای جهت)</b><br>
+۱) دوربین را انتخاب کن ۲) Build scenes ۳) در Studio Mode صحنه «99 تلهپرامپتر» در Preview می‌ماند و «00 استودیو» ضبط می‌شود.<br>
+<b>جهت چپ (←)</b> مرحله بعد · <b>جهت راست (→)</b> مرحله قبلی · <b>F9</b> اول پرده · <b>F5/F6</b> زوم]]
 end
 
 function script_properties()
@@ -607,10 +844,11 @@ function script_properties()
   obs.source_list_release(sources)
   obs.obs_properties_add_bool(p, "studio_preview", "نگه‌داشتن پرامپتر در Preview هنگام Studio Mode")
   obs.obs_properties_add_button(p, "build", "Build scenes (یکبار)", function() build_scenes(); apply(); return true end)
+  obs.obs_properties_add_button(p, "arrowkeys", "تنظیم کلیدهای جهت (← جلو / → عقب)", function() reset_arrow_hotkeys(); return true end)
   obs.obs_properties_add_int(p, "goto", "برو به مرحله", 1, 300, 1)
   obs.obs_properties_add_button(p, "go", "Go", function() apply(); return true end)
-  obs.obs_properties_add_button(p, "prev", "◀ قبلی (PageUp)", function() do_prev(); return true end)
-  obs.obs_properties_add_button(p, "next", "بعدی ▶ (PageDown)", function() do_next(); return true end)
+  obs.obs_properties_add_button(p, "prev", "▶ قبلی (Arrow Right)", function() do_prev(); return true end)
+  obs.obs_properties_add_button(p, "next", "بعدی ◀ (Arrow Left)", function() do_next(); return true end)
   obs.obs_properties_add_button(p, "zin", "زوم این (F5)", function() zoom_toggle(); return true end)
   obs.obs_properties_add_button(p, "zout", "زوم اوت (F6)", function() zoom_out(); return true end)
   obs.obs_properties_add_button(p, "rec", "● شروع/توقف ضبط (از اول این پرده)", function() record_act(true); return true end)
@@ -985,10 +1223,11 @@ echo "  - $DIR/steps_data.lua"
 echo "  - $DIR/prompter.html"
 echo ""
 echo "مراحل بعدی در OBS:"
-echo "  1) Tools > Scripts: اسکریپت قبلی v7 را حذف (-) و hark_studio_v8.lua را اضافه (+) کنید."
-echo "  2) دوربین را انتخاب کرده و روی Build scenes بزنید."
-echo "  3) اگر Browser Dock دارید: Tools > WebSocket Server Settings (پورت 4455) را فعال و prompter.html را در Docks > Custom Browser Docks اضافه کنید."
-echo "  4) اگر Browser Source ندارید: Studio Mode را روشن کنید تا 99 تلهپرامپتر در Preview بماند."
+echo "  1) (اختیاری ولی بهترین کیفیت راست‌چین): فایل prompter_slides.zip را همین‌جا Extract کنید تا پوشه prompter/ ساخته شود."
+echo "  2) Tools > Scripts: اسکریپت قبلی را حذف (-) و hark_studio_v8.lua را اضافه (+) کنید."
+echo "  3) دوربین را انتخاب کرده و روی Build scenes بزنید."
+echo "  4) برای جابجایی با جهت چپ (← جلو) و راست (→ عقب)، روی دکمه «تنظیم کلیدهای جهت» کلیک کنید."
+echo "  5) Studio Mode را روشن کنید تا 99 تله‌پرامپتر در Preview بماند و 00 استودیو ضبط شود."
 `;
 }
 

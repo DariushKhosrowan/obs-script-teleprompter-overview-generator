@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   Copy,
   Download,
+  ImageDown,
+  Loader2,
   Plug,
   PlugZap,
   Monitor,
@@ -15,6 +17,11 @@ import {
   generatePrompterHtml,
   generateStepsDataLua,
 } from '../utils/obsGenerators';
+import {
+  exportPrompterPngZip,
+  renderStepPrompterCanvas,
+} from '../utils/prompterPngExporter';
+import { toPersianDigits } from '../utils/persian';
 
 interface ObsIntegrationViewProps {
   steps: StudioStep[];
@@ -40,6 +47,20 @@ function downloadTextFile(filename: string, content: string, mime = 'text/plain;
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function downloadBinaryFile(filename: string, bytes: Uint8Array, mime = 'application/zip') {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const blob = new Blob([copy], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
 export const ObsIntegrationView: React.FC<ObsIntegrationViewProps> = ({
   steps,
   settings,
@@ -51,6 +72,32 @@ export const ObsIntegrationView: React.FC<ObsIntegrationViewProps> = ({
 }) => {
   const [fileTab, setFileTab] = useState<FileTab>('installer');
   const [copiedTab, setCopiedTab] = useState<FileTab | null>(null);
+  const [zipProgress, setZipProgress] = useState<{ done: number; total: number } | null>(null);
+  const [zipReadyMsg, setZipReadyMsg] = useState<string | null>(null);
+  const [previewStepIdx, setPreviewStepIdx] = useState<number>(0);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas || steps.length === 0) return;
+    const safeIdx = Math.max(0, Math.min(steps.length - 1, previewStepIdx));
+    void renderStepPrompterCanvas(canvas, steps, safeIdx);
+  }, [steps, previewStepIdx]);
+
+  const handleDownloadPrompterZip = async () => {
+    if (zipProgress || steps.length === 0) return;
+    setZipReadyMsg(null);
+    setZipProgress({ done: 0, total: steps.length });
+    try {
+      const zipBytes = await exportPrompterPngZip(steps, (done, total) => {
+        setZipProgress({ done, total });
+      });
+      downloadBinaryFile('prompter_slides.zip', zipBytes, 'application/zip');
+      setZipReadyMsg(`فایل prompter_slides.zip (${toPersianDigits(steps.length)} تصویر 1920×1080) آماده و دانلود شد.`);
+    } finally {
+      setZipProgress(null);
+    }
+  };
 
   const luaCode = useMemo(() => generateLuaV8(steps, settings), [steps, settings]);
   const prompterCode = useMemo(
@@ -92,73 +139,131 @@ export const ObsIntegrationView: React.FC<ObsIntegrationViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Why v7 wasn't inside OBS + 2 clear solutions */}
+      {/* Pixel-perfect PNG Prompter Exporter + Instructions */}
       <section className="rounded-xl border border-white/10 bg-[#13161D] p-5">
-        <h1 className="text-lg font-bold text-slate-100">
-          چطور تله‌پرامپتر را دقیقاً درون OBS ببریم و با یک کلیک هر دو را جلو ببریم؟
-        </h1>
-        <p className="mt-1.5 text-sm leading-relaxed text-slate-300">
-          در اسکریپت قبلی (v7) دو مشکل وجود داشت: اول اینکه در بعضی نسخه‌های OBS (به‌خصوص لینوکس) منبع{' '}
-          <code className="rounded bg-black/40 px-1.5 py-0.5 text-xs text-amber-300">
-            browser_source
-          </code>{' '}
-          وجود ندارد و اسکریپت صحنه «99 تلهپرامپتر» را پاک می‌کرد؛ دوم اینکه{' '}
-          <code className="rounded bg-black/40 px-1.5 py-0.5 text-xs text-amber-300">
-            prompter.html
-          </code>{' '}
-          فقط فایل{' '}
-          <code className="rounded bg-black/40 px-1.5 py-0.5 text-xs text-amber-300">
-            state.js
-          </code>{' '}
-          را می‌خواند و هنگام کلیک، هیچ فرمانی به OBS نمی‌فرستاد. در نسخه جدید (v8) هر دو حل شده‌اند:
-        </p>
+        <div className="grid grid-cols-1 items-center gap-6 lg:grid-cols-12">
+          <div className="space-y-3 lg:col-span-7">
+            <h1 className="text-lg font-bold text-slate-100">
+              تله‌پرامپتر راست‌چینِ بی‌نقص داخل OBS + جابجایی با کلیدهای جهت (← / →)
+            </h1>
+            <p className="text-sm leading-relaxed text-slate-300">
+              موتور متنی پیش‌فرض OBS در لینوکس (<code dir="ltr" className="rounded bg-black/40 px-1.5 py-0.5 text-xs text-amber-300">text_ft2_source_v2</code>) از راست‌چین و چسباندن حروف فارسی پشتیبانی نمی‌کند. در نسخه جدید، علاوه بر موتور راست‌چین‌ساز فارسی+انگلیسی در خود اسکریپت Lua، می‌توانید تمام {toPersianDigits(steps.length)} مرحله را به‌صورت تصاویر <strong dir="ltr">1920×1080</strong> با فونت وزیرمتن بسازید تا حتی داخل OBS لینوکس ۱۰۰٪ استاندارد نمایش داده شوند.
+            </p>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                type="button"
+                disabled={zipProgress !== null}
+                onClick={() => void handleDownloadPrompterZip()}
+                className="inline-flex items-center gap-2 rounded-lg bg-amber-400 px-4 py-2.5 text-sm font-bold text-[#0B0D11] transition-colors hover:bg-amber-300 disabled:cursor-wait disabled:opacity-75 cursor-pointer"
+              >
+                {zipProgress ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>
+                      در حال ساخت تصویر {toPersianDigits(zipProgress.done)} از {toPersianDigits(zipProgress.total)}...
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <ImageDown className="h-4 w-4" />
+                    <span>ساخت و دانلود تصاویر پرامپتر (prompter_slides.zip)</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => downloadTextFile('replace_hark_v8.sh', installerCode)}
+                className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-[#1A1E28] px-4 py-2.5 text-xs font-semibold text-slate-100 hover:bg-[#222836] cursor-pointer"
+              >
+                <Download className="h-4 w-4 text-amber-400" />
+                <span>دانلود اسکریپت جایگزینی (replace_hark_v8.sh)</span>
+              </button>
+            </div>
+
+            {zipReadyMsg && (
+              <div className="rounded-lg border border-emerald-500/35 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
+                {zipReadyMsg} فایل را داخل پوشه Hark Studio اکسترکت کنید تا پوشه <span dir="ltr" className="font-mono text-emerald-100">prompter/</span> ساخته شود، سپس در OBS دکمه <strong dir="ltr">Build scenes</strong> را بزنید.
+              </div>
+            )}
+          </div>
+
+          {/* Live 16:9 Preview of generated OBS PNG */}
+          <div className="lg:col-span-5">
+            <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0B0D11]">
+              <canvas
+                ref={previewCanvasRef}
+                className="block aspect-video w-full"
+              />
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+              <span>پیش‌نمایش خروجی <span dir="ltr" className="font-mono text-slate-300">prompter/p-{String(previewStepIdx + 1).padStart(2, '0')}.png</span></span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewStepIdx((i) => Math.max(0, i - 1))}
+                  className="rounded border border-white/10 bg-[#1A1E28] px-2 py-0.5 text-slate-200 hover:bg-[#242A38] cursor-pointer"
+                >
+                  قبلی
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewStepIdx((i) => Math.min(steps.length - 1, i + 1))}
+                  className="rounded border border-white/10 bg-[#1A1E28] px-2 py-0.5 text-slate-200 hover:bg-[#242A38] cursor-pointer"
+                >
+                  بعدی
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="rounded-lg border border-white/10 bg-[#0E1117] p-4">
             <div className="text-sm font-bold text-amber-400">
-              روش ۱ (بهترین): داک سفارشی داخل OBS + WebSocket
+              روش ۱ (پیشنهادی برای لینوکس بدون Browser Source): تصاویر پرامپتر + Studio Mode
             </div>
             <ol className="mt-2.5 list-inside list-decimal space-y-1.5 text-xs leading-6 text-slate-300">
               <li>
-                فایل‌های <strong dir="ltr">hark_studio_v8.lua</strong> و <strong dir="ltr">prompter.html</strong> جدید را دانلود و جایگزین کنید.
+                دکمه زرد <strong>prompter_slides.zip</strong> را بزنید و آن را داخل پوشه <span dir="ltr" className="font-mono text-slate-200">HarkStudio</span> اکسترکت کنید (پوشه <span dir="ltr" className="font-mono text-slate-200">prompter/</span> ساخته می‌شود).
               </li>
               <li>
-                در OBS به مسیر{' '}
-                <span dir="ltr" className="inline-block font-mono text-slate-200">
-                  Tools &gt; WebSocket Server Settings
-                </span>{' '}
-                بروید و تیک{' '}
-                <strong dir="ltr">Enable WebSocket server</strong> (پورت <span dir="ltr" className="font-mono">4455</span>) را بزنید.
+                اسکریپت <strong dir="ltr">hark_studio_v8.lua</strong> جدید را با <span dir="ltr" className="font-mono text-slate-200">replace_hark_v8.sh</span> جایگزین و در OBS روی <strong>Build scenes</strong> بزنید.
               </li>
               <li>
-                در OBS از منوی{' '}
-                <span dir="ltr" className="inline-block font-mono text-slate-200">
-                  Docks &gt; Custom Browser Docks
-                </span>{' '}
-                یک داک با نام <strong dir="ltr">Teleprompter</strong> بسازید و آدرس فایل <span dir="ltr" className="font-mono">prompter.html</span> (یا لینک همین برنامه با <span dir="ltr" className="font-mono">?dock=1</span>) را بدهید.
+                برای فعال‌شدن کلیدهای جهت، در پنجره <span dir="ltr" className="font-mono text-slate-200">Tools &gt; Scripts</span> روی دکمه <strong>«تنظیم کلیدهای جهت (← جلو / → عقب)»</strong> کلیک کنید.
               </li>
               <li>
-                پنل تله‌پرامپتر داخل خود OBS قفل می‌شود، ضبط نمی‌شود و با یک کلیک روی دکمه <strong>مرحله بعد</strong> هم متن و هم اسلاید OBS جلو می‌روند.
+                <strong>Studio Mode</strong> را روشن کنید: خروجی (Program) روی <strong>00 استودیو</strong> می‌ماند و ضبط می‌شود؛ پیش‌نمایش (Preview) همیشه پرامپترِ راست‌چین و مرتب را نمایش می‌دهد.
               </li>
             </ol>
           </div>
 
           <div className="rounded-lg border border-white/10 bg-[#0E1117] p-4">
             <div className="text-sm font-bold text-slate-100">
-              روش ۲ (اگر OBS شما Browser Dock ندارد): متن بومی + Studio Mode
+              روش ۲ (اگر OBS شما Browser Dock دارد): داک سفارشی + WebSocket
             </div>
             <ol className="mt-2.5 list-inside list-decimal space-y-1.5 text-xs leading-6 text-slate-300">
               <li>
-                در <span className="font-mono text-slate-200">hark_studio_v8.lua</span> اگر <span className="font-mono">browser_source</span> نباشد، به‌جای حذف، منبع متن فارسی بومی OBS در صحنه <strong>99 تلهپرامپتر (ضبط نمیشود)</strong> ساخته می‌شود.
+                در OBS به مسیر{' '}
+                <span dir="ltr" className="inline-block font-mono text-slate-200">
+                  Tools &gt; WebSocket Server Settings
+                </span>{' '}
+                بروید و <strong dir="ltr">Enable WebSocket server</strong> (پورت <span dir="ltr" className="font-mono">4455</span>) را فعال کنید.
               </li>
               <li>
-                در OBS دکمه <strong>Studio Mode</strong> را روشن کنید تا دو پنجره (Preview در چپ و Program در راست) داشته باشید.
+                از منوی{' '}
+                <span dir="ltr" className="inline-block font-mono text-slate-200">
+                  Docks &gt; Custom Browser Docks
+                </span>{' '}
+                یک داک با آدرس <span dir="ltr" className="font-mono">prompter.html</span> (یا همین برنامه با <span dir="ltr" className="font-mono">?dock=1</span>) اضافه کنید.
               </li>
               <li>
-                خروجی/ضبط (Program) روی <strong>00 استودیو</strong> می‌ماند و پیش‌نمایش (Preview) همیشه روی <strong>99 تلهپرامپتر</strong> قفل می‌شود؛ بنابراین متن دقیقاً داخل پنجره OBS است ولی در ویدیو ضبط نمی‌شود.
+                کلیدهای جهت چپ (<span dir="ltr" className="font-mono">←</span> = مرحله بعد) و راست (<span dir="ltr" className="font-mono">→</span> = مرحله قبل) هم در داک و هم مستقیم در OBS کار می‌کنند.
               </li>
               <li>
-                با زدن <span className="font-mono">PageDown</span> (یا کلیک از همین کنترلر)، هم متن Preview و هم اسلاید Program هم‌زمان تغییر می‌کنند.
+                اگر پوشه <span dir="ltr" className="font-mono">prompter/</span> نباشد، Lua به‌صورت خودکار حروف فارسی و کلمات انگلیسی مثل <span dir="ltr" className="font-mono">SLIDE / SCAM</span> را برای متن بومی OBS مرتب می‌کند.
               </li>
             </ol>
           </div>

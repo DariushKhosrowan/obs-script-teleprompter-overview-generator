@@ -16,6 +16,7 @@ import {
   generatePrompterHtml,
   generateStepsDataLua,
 } from './obsGenerators';
+import { buildUncompressedZip, crc32 } from './zipBuilder';
 import type { ObsSettings } from '../types/studio';
 
 const SAMPLE_SETTINGS: ObsSettings = {
@@ -77,8 +78,14 @@ test('generateStepsDataLua escapes quotes and writes valid Lua table entries', (
   assert.match(lua, /act=1, layout="SCAM", slide=1/);
 });
 
-test('generateLuaV8 includes native OBS text fallback and Studio Mode preview sync', () => {
+test('generateLuaV8 includes Arrow Left/Right keys, PNG prompter priority, and Persian RTL reshaper', () => {
   const lua = generateLuaV8(DEFAULT_STEPS, SAMPLE_SETTINGS);
+  assert.match(lua, /hs_next = "OBS_KEY_LEFT"/);
+  assert.match(lua, /hs_prev = "OBS_KEY_RIGHT"/);
+  assert.match(lua, /reset_arrow_hotkeys/);
+  assert.match(lua, /prompter_img_path/);
+  assert.match(lua, /shape_multiline_for_ft2/);
+  assert.match(lua, /bidi_visual_line/);
   assert.match(lua, /text_ft2_source_v2/);
   assert.match(lua, /update_native_prompter_text/);
   assert.match(lua, /sync_studio_preview/);
@@ -91,9 +98,11 @@ test('generateLuaV8 includes native OBS text fallback and Studio Mode preview sy
   assert.match(winLua, /text_gdiplus_v2/);
 });
 
-test('generatePrompterHtml embeds steps JSON, WebSocket trigger, and fast state polling', () => {
+test('generatePrompterHtml embeds steps JSON, Arrow keys, WebSocket trigger, and fast state polling', () => {
   const html = generatePrompterHtml(DEFAULT_STEPS, SAMPLE_SETTINGS);
   assert.match(html, /TriggerHotkeyByName/);
+  assert.match(html, /ArrowLeft/);
+  assert.match(html, /ArrowRight/);
   assert.match(html, /hs_next/);
   assert.match(html, /POLL_MS=150/);
   assert.match(html, /فرض کن گوشیت زنگ می‌خوره/);
@@ -105,6 +114,7 @@ test('generateInstallerScript bundles all three files with backup directory logi
   assert.match(sh, /hark_studio_v8\.lua/);
   assert.match(sh, /steps_data\.lua/);
   assert.match(sh, /prompter\.html/);
+  assert.match(sh, /prompter_slides\.zip/);
   assert.match(sh, /backup_v7_/);
 });
 
@@ -114,4 +124,63 @@ test('generated Lua script contains no unfinished single-line quoted strings', (
   assert.match(lua, /g:write\("\}\\n"\)/);
   assert.doesNotMatch(lua, /g:write\("return \{\n/);
   assert.doesNotMatch(lua, /g:write\("\}\n/);
+
+  const lines = lua.split('\n');
+  let inLongComment = false;
+  let inLongString = false;
+  lines.forEach((rawLine, idx) => {
+    const line = rawLine;
+    if (inLongComment) {
+      if (line.includes('--]]')) inLongComment = false;
+      return;
+    }
+    if (inLongString) {
+      if (line.includes(']]')) inLongString = false;
+      return;
+    }
+    if (line.includes('--[[')) {
+      if (!line.includes('--]]')) inLongComment = true;
+      return;
+    }
+    if (line.includes('[[')) {
+      if (!line.includes(']]')) inLongString = true;
+      return;
+    }
+
+    let quote: '"' | "'" | null = null;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (!quote && ch === '-' && line[i + 1] === '-') break;
+      if (quote) {
+        if (ch === '\\') {
+          i += 1;
+          continue;
+        }
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      }
+    }
+    assert.equal(quote, null, `Unclosed string on Lua line ${idx + 1}: ${line}`);
+  });
 });
+
+test('crc32 and buildUncompressedZip produce valid ZIP structure', () => {
+  const check = crc32(new TextEncoder().encode('123456789'));
+  assert.equal(check, 0xcbf43926);
+
+  const zip = buildUncompressedZip([
+    { name: 'prompter/p-01.png', data: new Uint8Array([137, 80, 78, 71]) },
+    { name: 'prompter/p-02.png', data: new Uint8Array([1, 2, 3]) },
+  ]);
+
+  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  // Local file header signature PK\x03\x04
+  assert.equal(view.getUint32(0, true), 0x04034b50);
+  // EOCD signature PK\x05\x06 at tail
+  const eocdOffset = zip.length - 22;
+  assert.equal(view.getUint32(eocdOffset, true), 0x06054b50);
+  assert.equal(view.getUint16(eocdOffset + 8, true), 2);
+  assert.equal(view.getUint16(eocdOffset + 10, true), 2);
+});
+
